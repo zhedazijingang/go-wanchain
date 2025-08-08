@@ -51,13 +51,45 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-getAddr=$(sudo docker run --privileged -v ~/.wanchain:/root/.wanchain ${DOCKERIMG} /bin/gwan console --exec "personal.newAccount('${PASSWD}')")
+# check if there is a snapshot
+if [ -f $HOME/gwandata.tgz ]; then
+    allowSnapshot=0
+    read -p "A snapshot file was found in your home directory. Would you like to use it? (N/y): " allowSnapshot
+    if [ "$allowSnapshot" == "Y" ] || [ "$allowSnapshot" == "y" ]; then
+        sudo apt install -y jq > /dev/null
+        SUMURL="https://raw.githubusercontent.com/wanchain/go-wanchain/refs/heads/develop/loadScript/snapshotMainnetChecksum.json"
+        OUTPUT_FILE="/tmp/config.json"
+        curl -s -o "$OUTPUT_FILE" "$SUMURL"
+        eChecksum=$(jq -r '.checksum' "$OUTPUT_FILE")
+
+        echo "Calculating the snapshot checksum, please wait about 10 minutes"
+        checksum=$(sha256sum $HOME/gwandata.tgz | awk '{print $1}')
+        if [ $checksum != $eChecksum ]; then
+            echo "Checksum mismatched"
+            exit -1
+        else
+            echo "Checksum matched, please wait about 15 minutes to unzip"
+        fi
+        
+        rm -rf $HOME/gwandatatmp
+        mkdir -p $HOME/gwandatatmp
+        tar zxf ~/gwandata.tgz  -C $HOME/gwandatatmp/
+        sudo rm -rf $HOME/.wanchain/gwan
+        sudo mkdir -p $HOME/.wanchain
+        sudo mv $HOME/gwandatatmp/gwan $HOME/.wanchain/
+        sudo rm -rf $HOME/gwandatatmp
+    fi
+    sudo rm -rf $HOME/gwandata.tgz
+fi
+
+
+getAddr=$(sudo docker run --rm --privileged -v ~/.wanchain:/root/.wanchain ${DOCKERIMG} /bin/gwan console --exec "personal.newAccount('${PASSWD}')")
 
 ADDR=$getAddr
 
 echo $ADDR
 
-getPK=$(sudo docker run --privileged -v ~/.wanchain:/root/.wanchain ${DOCKERIMG} /bin/gwan console --exec "personal.showPublicKey(${ADDR},'${PASSWD}')")
+getPK=$(sudo docker run --rm --privileged -v ~/.wanchain:/root/.wanchain ${DOCKERIMG} /bin/gwan console --exec "personal.showPublicKey(${ADDR},'${PASSWD}')")
 PK=$getPK
 
 echo $PK

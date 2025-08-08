@@ -37,6 +37,9 @@ echo ''
 echo ''
 echo ''
 
+eBlockNumber=0
+localBlockNumber=0
+localBlockNumberOk=1
 DOCKERID=$(sudo docker ps|grep gwan|awk '{print $1}')
 GCMODE='full'
 if [ "$GCMODEENV" = "archive" ]; then
@@ -53,6 +56,55 @@ else
     echo "docker pull succeed"
 fi
 
+# check if there is a snapshot
+if [ -f $HOME/gwandata.tgz ]; then
+    allowSnapshot=0
+    read -p "A snapshot file was found in your home directory. Would you like to use it? (N/y): " allowSnapshot
+    if [ "$allowSnapshot" == "Y" ] || [ "$allowSnapshot" == "y" ]; then
+        # check if there is 90G free disk space. for tar 
+        freeDisk=$(df -k $HOME | sed -n 2p | awk '{print $4}')
+        if [ $freeDisk -lt 90000000 ] ; then
+            read -p  "Your disk free storage is not enough(less than 90G), would you like to remove gwan chain data? (N/y): " allowDelete
+            if [ "$allowDelete" == "Y" ] || [ "$allowDelete" == "y" ]; then
+                echo ""
+            else
+                exit -1
+            fi
+        fi
+
+        sudo apt install -y jq > /dev/null
+        SUMURL="https://raw.githubusercontent.com/wanchain/go-wanchain/refs/heads/develop/loadScript/snapshotMainnetChecksum.json"
+        OUTPUT_FILE="/tmp/config.json"
+        curl -s -o "$OUTPUT_FILE" "$SUMURL"
+        eChecksum=$(jq -r '.checksum' "$OUTPUT_FILE")
+        eBlockNumber=$(jq -r '.blockNumber' "$OUTPUT_FILE")
+        echo "Calculating the snapshot checksum, please wait about 10 minutes"
+        checksum=$(sha256sum $HOME/gwandata.tgz | awk '{print $1}')
+        if [ $checksum != $eChecksum ]; then
+            echo "Checksum mismatched"
+            exit -1
+        else
+            echo "Checksum matched, please wait about 15 minutes to unzip"
+        fi
+
+        # check if there is 90G free disk space. for tar 
+        if [ "$allowDelete" == "Y" ] || [ "$allowDelete" == "y" ]; then
+            sudo docker stop gwan >/dev/null 2>&1
+            localBlockNumber=$(sudo docker run --rm --privileged -v ~/.wanchain:/root/.wanchain wanchain/client-go:3.0.2 /bin/gwan  console --exec "eth.blockNumber" 2>/dev/null)
+            localBlockNumberOk=$?
+            echo $localBlockNumberOk $localBlockNumber
+            sudo rm -rf $HOME/.wanchain/gwan/chaindata
+        fi
+
+        rm -rf $HOME/gwandatatmp
+        mkdir -p $HOME/gwandatatmp
+        tar zxf ~/gwandata.tgz  -C $HOME/gwandatatmp/
+    fi
+    sudo rm -rf $HOME/gwandata.tgz
+fi
+
+
+
 sudo docker stop ${DOCKERID} >/dev/null 2>&1
 
 sudo docker rm ${DOCKERID} >/dev/null 2>&1
@@ -60,6 +112,30 @@ sudo docker rm ${DOCKERID} >/dev/null 2>&1
 sudo docker stop gwan >/dev/null 2>&1
 
 sudo docker rm gwan >/dev/null 2>&1
+
+# check if there is a snapshot
+if [ -d $HOME/gwandatatmp/gwan/avgretdb ]; then
+    # check if there is the .wanchain/gwan
+    sudo mkdir -p $HOME/.wanchain
+    if [ -d $HOME/.wanchain/gwan/avgretdb ]; then
+        if (($localBlockNumberOk != 0)); then
+	        localBlockNumber=$(sudo docker run --rm --privileged -v ~/.wanchain:/root/.wanchain wanchain/client-go:3.0.2 /bin/gwan  console --exec "eth.blockNumber" 2>/dev/null)
+	        localBlockNumberOk=$?
+	        echo $localBlockNumberOk $localBlockNumber
+        fi
+        if (( $localBlockNumberOk == 0 && $localBlockNumber > $eBlockNumber )); then
+            sudo cp $HOME/.wanchain/gwan/avgretdb/* $HOME/gwandatatmp/gwan/avgretdb
+            sudo cp $HOME/.wanchain/gwan/eplocaldb/* $HOME/gwandatatmp/gwan/eplocaldb
+            sudo cp $HOME/.wanchain/gwan/rblocaldb/* $HOME/gwandatatmp/gwan/rblocaldb
+            sudo cp $HOME/.wanchain/gwan/pos/* $HOME/gwandatatmp/gwan/pos
+            sudo cp $HOME/.wanchain/gwan/incentive/* $HOME/gwandatatmp/gwan/incentive
+            sudo cp $HOME/.wanchain/gwan/nodekey $HOME/gwandatatmp/gwan
+        fi
+    fi
+    sudo rm -rf $HOME/.wanchain/gwan
+    sudo mv $HOME/gwandatatmp/gwan $HOME/.wanchain/
+    sudo rm -rf $HOME/gwandatatmp
+fi
 
 waddrCount=$(sudo docker run --privileged --name gwan -v ${HOME}/.wanchain:/root/.wanchain ${DOCKERIMG} /bin/gwan account  pubkeys ${addrNew} ${PASSWD} | grep waddress | wc -l)
 sudo docker rm gwan >/dev/null 2>&1
